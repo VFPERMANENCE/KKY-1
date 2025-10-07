@@ -22,7 +22,7 @@
 sample_ok.vfs-Выполняется до команды cd;
 sample_error.vfs-Останавливается на unknown_cmd;
 sample_exit.vfs - Останавливается на exit.
-Для запуска используются команды python PW1.py --create-samples и python vfs_emulator.py --startup-script sample_ok.vfs (название скрипта)
+Для запуска используются команды в терминале (для этого реализован парсер) python PW1.py --create-samples и python PW1.py --startup-script sample_ok.vfs (название скрипта)
 
 Этап 3 — VFS (виртуальная файловая система)
 
@@ -33,6 +33,24 @@ sample_exit.vfs - Останавливается на exit.
 Служебная команда vfs-info: имя VFS; SHA-256 хеш её содержимого.
 
 Подготовлены тестовые VFS-файлы: минимальная VFS; несколько файлов и папок; вложенность не менее 3 уровней.
+
+Файлы для тестирования создаются через терминал с помощью команды: python PW1.py --create-samples (для этого реализован парсер, как и в этапе 2)
+
+Добавлены скрипты для тестирования:
+test_vfs_full.vfs - тест всех реализованных команд
+test_vfs_errors.vfs - проверка на вывод ошибки при неправильном формате подаваемого файла
+test_vfs_navigation - тест cd .. и абсолютных путей, тест должен завершиться закрытием граф. интерфейса эмулятора.
+
+Добавлены тестовые CSV-файлы:
+vfs_minimal.csv -
+vfs_nested.csv - 
+vfs_error.csv -
+
+Примеры команд для тестов:
+1.python PW1.py --vfs-file vfs_nested.csv --startup-script test_vfs_full.vfs -скрипт должен остановиться на первой же ошибке cd non-existent-dir
+2.python PW1.py --vfs-file vfs_nested.csv --startup-script test_vfs_navigation.vfs - В эмуляторе последним отобразится exit и скрипт завершится 
+3.python PW1.py --vfs-file vfs_error.csv - FATAL VFS LOAD ERROR в терминал, неверный формат
+4.python PW1.py --vfs-file vfs_nested.csv --startup-script test_vfs_errors.vfs -выведутся две ошибки cd: /nonexistent: No such directory in VFS or is a file и --- Script stopped due to error on line: cd /nonexistent ---
 
 Этап 4 — Основные команды
 

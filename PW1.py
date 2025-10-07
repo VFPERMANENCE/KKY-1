@@ -9,6 +9,7 @@ import csv
 import hashlib
 import base64
 from typing import Tuple, Optional, List
+import binascii # Импортируем binascii для явной обработки ошибки Base64
 
 
 class VFSNode: # Представляет файл или директорию в VFS.
@@ -117,13 +118,31 @@ def load_vfs_from_csv(file_path: str) -> Tuple[Optional[VFS], Optional[str]]: # 
                     if filename in current_node.children:
                         return None, f"Элемент '{filename}' уже существует в VFS"
                     
+                    decoded_bytes = b''
                     try:
-                        # Декодирование содержимого для проверки корректности base64
-                        base64.b64decode(vfs_content)
+                        # 1. Попытка декодирования Base64
+                        decoded_bytes = base64.b64decode(vfs_content)
+                        
+                        # 2. ПРОВЕРКА (Исправление 2.0): Если Base64 не пуст, но декодирование дало пустой результат
+                        if vfs_content.strip() and len(decoded_bytes) == 0:
+                            return None, f"Неверный формат Base64 для файла (пустой результат декодирования): {filename}"
+
+                        # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ (Исправление 3.0): 
+                        # Проверяем, что декодированные байты могут быть преобразованы в UTF-8. 
+                        # Это ловит "мусор", пропущенный Base64.
+                        # Если это не текстовый файл (например, бинарный), это все равно 
+                        # вызывает FATAL, как требуется в Тесте 3.
+                        decoded_bytes.decode('utf-8')
+                        
                         current_node.children[filename] = VFSNode(filename, 'file', vfs_content)
-                    except Exception:
-                        # ФАТАЛЬНАЯ ОШИБКА 3: Возвращаем ошибку и НЕ запускаем GUI
-                        return None, f"Неверный формат Base64 для файла: {filename}"
+                    except binascii.Error: 
+                        # ФАТАЛЬНАЯ ОШИБКА 3: Ошибка Base64
+                        return None, f"Неверный формат Base64 для файла (ошибка binascii): {filename}"
+                    except UnicodeDecodeError:
+                        # ФАТАЛЬНАЯ ОШИБКА 3: Ошибка кодировки (поймали мусорный Base64)
+                        return None, f"Неверный формат Base64 для файла (ошибка кодирования): {filename}"
+                    except Exception as e:
+                         return None, f"Непредвиденная ошибка при добавлении файла {filename}: {e}"
                 else:
                     return None, f"Неверный тип VFS: {vfs_type}"
 
@@ -517,17 +536,14 @@ def main():
     # 2. Загрузка VFS 
     if args.vfs_file:
         vfs, vfs_error = load_vfs_from_csv(args.vfs_file)
+        
+        # Если при загрузке VFS возникла фатальная ошибка, немедленно выходим.
+        # ТЕСТ 3: Фатальная ошибка загрузки VFS
         if vfs_error:
-            # ТЕСТ 3: Фатальная ошибка загрузки VFS
             print(f"FATAL VFS LOAD ERROR: {vfs_error}")
             sys.exit(1)
+            
         config.vfs = vfs
-        
-    # 3. Проверка: если не было VFS-файла, но были другие аргументы (например, скрипт), запускаем.
-    if not config.vfs and config.vfs_file:
-          # Это не должно случиться, если обработка ошибки выше сработала, но как защита:
-          print("FATAL VFS LOAD ERROR: VFS file specified but failed to load. Exiting.")
-          sys.exit(1)
           
     # 4. Создаём и запускаем GUI-приложение
     app = VFSApp(config)
