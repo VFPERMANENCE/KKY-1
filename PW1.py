@@ -4,62 +4,65 @@ import sys
 import os
 import tkinter as tk
 from tkinter import scrolledtext
-from datetime import datetime, timezone # Добавлен timezone для исправления DeprecationWarning
+from datetime import datetime, timezone
 import csv
 import hashlib
 import base64
+from typing import Tuple, Optional, List
 
 
-class VFSNode: #Представляет файл или директорию в VFS.
-    def __init__(self, name, type='dir', content=None):
+class VFSNode: # Представляет файл или директорию в VFS.
+    def __init__(self, name: str, type: str = 'dir', content: Optional[str] = None):
         self.name = name
         self.type = type
         self.content = content # содержимое (Base64 для файлов)
         self.children = {}      # только для директорий
 
 
-class VFS: #Виртуальная файловая система, хранящаяся в памяти.
-    def __init__(self, name="Unnamed VFS"):
+class VFS: # Виртуальная файловая система, хранящаяся в памяти.
+    def __init__(self, name: str = "Unnamed VFS"):
         self.name = name
         self.root = VFSNode("/", 'dir')
         self.current_dir = self.root
         self.hash_value = "" # SHA-256 хеш данных
         self.raw_data_string = "" # Исходная строка данных для хеширования
 
-    def calculate_hash(self): #Вычисляет SHA-256 хеш всех данных VFS (для команды vfs-info).
+    def calculate_hash(self): # Вычисляет SHA-256 хеш всех данных VFS (для команды vfs-info).
         # Хешируем исходную строку данных CSV
         self.hash_value = hashlib.sha256(self.raw_data_string.encode('utf-8')).hexdigest()
         return self.hash_value
 
-    def get_node(self, path): #Возвращает VFSNode по абсолютному или относительному пути.
-        # Упрощенная реализация: поддержка только абсолютных путей или имен
-        if path == "/":
+    def get_node(self, path: str) -> Optional[VFSNode]: # Возвращает VFSNode по абсолютному или относительному пути.
+        if path == "" or path == "/":
             return self.root
         
-        path_parts = [p for p in path.split('/') if p]
+        # Убираем начальный и конечный слэши для корректного парсинга
+        # path_parts = ['config'] для пути '/config'
+        path_parts = [p for p in path.strip('/').split('/') if p]
 
         current_node = self.root
         
         for part in path_parts:
+            if current_node.type != 'dir':
+                return None # Нельзя зайти в файл
             if part in current_node.children:
                 current_node = current_node.children[part]
             else:
                 return None
         
         return current_node
-    
-    def get_children(self, node=None): #Возвращает список имен детей для текущего узла или указанного узла.
+        
+    def get_children(self, node: Optional[VFSNode] = None) -> Optional[List[str]]: # Возвращает список имен детей для текущего узла или указанного узла.
         node = node or self.current_dir
         if node.type != 'dir':
             return None
         return sorted(node.children.keys())
 
 
-def load_vfs_from_csv(file_path): #Загружает VFS из CSV-файла.Возвращает (VFS_object, error_message).
+def load_vfs_from_csv(file_path: str) -> Tuple[Optional[VFS], Optional[str]]: # Загружает VFS из CSV-файла. Возвращает (VFS_object, error_message).
     
     vfs_name = os.path.basename(file_path)
     vfs = VFS(name=vfs_name)
-    raw_data_list = [] # Список строк для последующего хеширования
     
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -68,7 +71,12 @@ def load_vfs_from_csv(file_path): #Загружает VFS из CSV-файла.В
             
             # Чтение CSV, включая заголовки
             reader = csv.reader(content.splitlines(), delimiter=',')
-            header = next(reader) # Пропускаем заголовок
+            
+            # Используем try-except для обработки пустого файла
+            try:
+                header = next(reader)
+            except StopIteration:
+                return None, f"Ошибка загрузки VFS: Файл '{file_path}' пуст."
 
             if header != ['Type', 'Path', 'Content']:
                  return None, "Неверный формат заголовка CSV: ожидается ['Type', 'Path', 'Content']"
@@ -103,7 +111,7 @@ def load_vfs_from_csv(file_path): #Загружает VFS из CSV-файла.В
                 # Добавляем конечный элемент
                 if vfs_type == 'dir':
                     if filename not in current_node.children:
-                         current_node.children[filename] = VFSNode(filename, 'dir')
+                        current_node.children[filename] = VFSNode(filename, 'dir')
                     # Если папка уже создана (как промежуточный узел), просто игнорируем
                 elif vfs_type == 'file':
                     if filename in current_node.children:
@@ -114,7 +122,8 @@ def load_vfs_from_csv(file_path): #Загружает VFS из CSV-файла.В
                         base64.b64decode(vfs_content)
                         current_node.children[filename] = VFSNode(filename, 'file', vfs_content)
                     except Exception:
-                         return None, f"Неверный формат Base64 для файла: {filename}"
+                        # ФАТАЛЬНАЯ ОШИБКА 3: Возвращаем ошибку и НЕ запускаем GUI
+                        return None, f"Неверный формат Base64 для файла: {filename}"
                 else:
                     return None, f"Неверный тип VFS: {vfs_type}"
 
@@ -123,19 +132,19 @@ def load_vfs_from_csv(file_path): #Загружает VFS из CSV-файла.В
     except Exception as e:
         return None, f"Ошибка загрузки VFS: Неверный формат данных CSV: {e}"
 
-    # После успешной загрузки вычисляем хеш
+    # После успешной загрузки (и только тогда) вычисляем хеш
     vfs.calculate_hash()
     return vfs, None
 
 
-class VFSConfig: #все внутренние настройки
-    def __init__(self, root_path=None, startup_script=None, vfs_file=None):
+class VFSConfig: # все внутренние настройки
+    def __init__(self, root_path: Optional[str] = None, startup_script: Optional[str] = None, vfs_file: Optional[str] = None):
         self.root_path = root_path or os.getcwd()
         self.startup_script = startup_script
         # ИСПРАВЛЕНИЕ: Используем timezone-aware datetime
         self.start_time = datetime.now(timezone.utc).isoformat()
         self.vfs_file = vfs_file
-        self.vfs = None # Объект VFS будет загружен в main()
+        self.vfs: Optional[VFS] = None # Объект VFS будет загружен в main()
 
         # Текущий путь в VFS (для cd/ls)
         self.vfs_cwd = "/" 
@@ -156,7 +165,7 @@ class VFSConfig: #все внутренние настройки
             "argv": " ".join(sys.argv)
         }.items()
 
-def parse_command(line): #Парсер команд с поддержкой кавычек (shlex). Возвращает список токенов.
+def parse_command(line: str) -> Tuple[Optional[List[str]], Optional[str]]: # Парсер команд с поддержкой кавычек (shlex). Возвращает список токенов.
     try:
         tokens = shlex.split(line)
     except ValueError as e:
@@ -164,7 +173,7 @@ def parse_command(line): #Парсер команд с поддержкой ка
         return None, f"parse error: {e}"
     return tokens, None
 
-def act(tokens, config: VFSConfig): #Выполняет заглушки команд. Принимает уже распарсенные токены (list) и config. Возвращает (output_str, is_error_bool).
+def act(tokens: List[str], config: VFSConfig) -> Tuple[str, bool]: # Выполняет заглушки команд. Принимает уже распарсенные токены (list) и config. Возвращает (output_str, is_error_bool).
     if tokens is None:
         return "parse error", True
     if len(tokens) == 0:
@@ -176,7 +185,7 @@ def act(tokens, config: VFSConfig): #Выполняет заглушки ком�
     if not config.vfs and cmd not in ("exit", "conf-dump"):
         return f"VFS не загружена. Доступны только exit и conf-dump.", True
     
-    current_node = config.vfs.get_node(config.vfs_cwd) if config.vfs else None
+    # ПРИМЕЧАНИЕ: Текущий узел ищется только в cd и ls, чтобы избежать повторного поиска.
 
     if cmd == "exit":
         return "exit", False
@@ -193,50 +202,59 @@ def act(tokens, config: VFSConfig): #Выполняет заглушки ком�
         return "\n".join(output), False
         
     elif cmd == "ls":
-        if current_node is None or current_node.type != 'dir':
-            return f"ls: {config.vfs_cwd}: Directory not found or is a file.", True
-        
+        if not config.vfs:
+            return "ls: VFS не загружена.", True
+
+        target_path = config.vfs_cwd # По умолчанию - текущая директория
         if len(args) > 0:
-            # Упрощенная заглушка для ls с аргументами: просто выводим имя
-            target_path = os.path.join(config.vfs_cwd, args[0])
-            target_node = config.vfs.get_node(target_path)
-            
-            if target_node:
-                return f"{target_node.name} ({target_node.type})", False
+            # Ищем узел по аргументу, относительно текущей директории, если он не абсолютный
+            if args[0].startswith('/'):
+                target_path = os.path.normpath(args[0])
+            elif args[0] == '.':
+                target_path = config.vfs_cwd
+            elif args[0] == '..':
+                target_path = os.path.normpath(os.path.join(config.vfs_cwd, '..'))
             else:
-                 return f"ls: {args[0]}: No such file or directory", True
+                 target_path = os.path.normpath(os.path.join(config.vfs_cwd, args[0]))
+            
+            # ИСПРАВЛЕНИЕ: Преобразование пути, содержащего os.sep (например, '\' на Windows), 
+            # обратно в VFS-формат (с использованием '/')
+            target_path = target_path.replace(os.sep, '/')
+            
+            # Дополнительная нормализация: если путь выходит за пределы корня, остаемся в корне
+            if target_path.startswith('..'):
+                 target_path = "/"
 
+        current_node = config.vfs.get_node(target_path)
 
-        # Вывод содержимого текущей директории VFS
+        if current_node is None:
+            return f"ls: {target_path}: No such file or directory.", True
+
+        if current_node.type != 'dir':
+            # Если это файл, просто выводим его имя
+            return f"[FILE] {current_node.name} (Size: {len(current_node.content)})", False
+
+        # Вывод содержимого целевой директории VFS
         lines = []
-        for name in config.vfs.get_children():
+        for name in current_node.children.keys():
             node = current_node.children[name]
             type_tag = "[DIR]" if node.type == 'dir' else "[FILE]"
-            size = len(node.content) if node.type == 'file' else ""
+            size = len(node.content) if node.type == 'file' and node.content else "N/A"
             lines.append(f"{type_tag} {name} (Size: {size})")
             
-        return "\n".join(lines) if lines else "Директория пуста.", False
-    
+        return "\n".join(sorted(lines)) if lines else "Директория пуста.", False
+        
     elif cmd == "cd":
+        if not config.vfs:
+            return "cd: VFS не загружена.", True
+
         if len(args) == 0:
             config.vfs_cwd = "/"
             return "", False
 
         target = args[0]
         
-        # Обработка ".." (наивно)
-        if target == "..":
-            if config.vfs_cwd == "/":
-                return "", False # Остаемся в корне
-            
-            # Убираем последний сегмент
-            parent_path = os.path.dirname(config.vfs_cwd)
-            # os.path.dirname('/data/docs') -> /data
-            # os.path.dirname('/data') -> /
-            config.vfs_cwd = parent_path if parent_path else "/"
-            return "", False
-        
-        # Формируем целевой путь
+        # 1. Формируем целевой путь
         if target.startswith('/'):
             # Абсолютный путь
             new_path = target
@@ -244,23 +262,32 @@ def act(tokens, config: VFSConfig): #Выполняет заглушки ком�
             # Относительный путь
             new_path = os.path.join(config.vfs_cwd, target)
             
-        # Нормализация пути (убираем двойные слэши и т.п.)
+        # 2. Нормализация пути (убираем двойные слэши, обрабатываем '..' и '.')
         new_path = os.path.normpath(new_path)
-        # Если нормализованный путь — только точка, считаем текущей директорией
-        if new_path == '.': new_path = config.vfs_cwd
-
+        
+        # ИСПРАВЛЕНИЕ: Преобразование пути, содержащего os.sep (например, '\' на Windows), 
+        # обратно в VFS-формат (с использованием '/')
+        new_path = new_path.replace(os.sep, '/') 
+        
+        # os.path.normpath может вернуть '.' или '..', что не является корректным VFS путем
+        if new_path.startswith('..'):
+             # Если путь выходит за пределы корня, остаемся в корне
+             new_path = "/"
+        elif new_path == '.':
+            new_path = config.vfs_cwd
+        
+        # 3. Ищем целевой узел
         target_node = config.vfs.get_node(new_path)
         
         if target_node is None or target_node.type != 'dir':
             return f"cd: {target}: No such directory in VFS or is a file", True
         
-        # Успешная смена директории
+        # 4. Успешная смена директории
         config.vfs_cwd = new_path
         return "", False
         
     elif cmd == "conf-dump":
         lines = []
-        # Теперь выводим vfs_current_dir, который обновляется командой cd
         for k, v in config.items():
             lines.append(f"{k}={v}")
         return "\n".join(lines), False
@@ -269,36 +296,42 @@ def act(tokens, config: VFSConfig): #Выполняет заглушки ком�
         return f"{cmd}: command not found", True
 
 
-
 class VFSApp:
-    def __init__(self, config: VFSConfig): #создаем само окно
+    def __init__(self, config: VFSConfig): # создаем само окно
         self.config = config
         self.root = tk.Tk()
         self.root.title("VFS Shell (Stage 3)")
         self.root.geometry("800x600")
 
         # Добавим отображение текущей директории VFS
-        self.cwd_label = tk.Label(self.root, text=f"CWD: {self.config.vfs_cwd}", anchor='w')
+        self.cwd_label = tk.Label(self.root, text=f"CWD: {self.config.vfs_cwd}", anchor='w', bg='#f0f0f0', font=('Courier', 10, 'bold'))
         self.cwd_label.pack(padx=10, pady=(10, 0), fill=tk.X)
         
-        self.output_text = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=20, width=70)
+        # ИЗМЕНЕНИЕ ЦВЕТОВ: Возвращаем светлую тему
+        self.output_text = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=20, width=70, bg='white', fg='black', font=('Courier', 10))
         self.output_text.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
         self.output_text.config(state=tk.NORMAL)
 
-        self.entry = tk.Entry(self.root, width=70)
-        self.entry.pack(padx=10, pady=5, fill=tk.X)
+        # Фрейм для поля ввода и кнопки
+        input_frame = tk.Frame(self.root)
+        input_frame.pack(padx=10, pady=5, fill=tk.X)
+
+        # ИЗМЕНЕНИЕ ЦВЕТОВ: Возвращаем светлую тему
+        self.entry = tk.Entry(input_frame, width=70, bg='white', fg='black', insertbackground='black', font=('Courier', 10))
+        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.entry.bind("<Return>", self.execute_command)
 
-        self.send_button = tk.Button(self.root, text="Отправить", command=self.execute_command)
-        self.send_button.pack(pady=5)
+        # ИЗМЕНЕНИЕ ЦВЕТОВ: Убираем явные цвета кнопки для использования стандартных Tkinter-стилей
+        self.send_button = tk.Button(input_frame, text="Отправить", command=self.execute_command)
+        self.send_button.pack(side=tk.RIGHT, padx=(5, 0))
 
         self.entry.focus()
         self._should_exit = False
 
-    def update_cwd_label(self): #Обновляет метку текущей директории в GUI.
-         self.cwd_label.config(text=f"CWD: {self.config.vfs_cwd}")
+    def update_cwd_label(self): # Обновляет метку текущей директории в GUI.
+          self.cwd_label.config(text=f"CWD: {self.config.vfs_cwd}")
         
-    def writeln(self, text=""): #Вставляет текст в output_text и скроллит вниз.
+    def writeln(self, text: str = ""): # Вставляет текст в output_text и скроллит вниз.
         self.output_text.insert(tk.END, text + "\n")
         self.output_text.see(tk.END)
         self.root.update()
@@ -329,13 +362,12 @@ class VFSApp:
         if output:
             self.writeln(output)
         
-        if tokens and tokens[0] == "cd":
-            # Принудительно обновляем метку после успешного cd
-            self.update_cwd_label()
+        # Обновляем CWD после выполнения команды (особенно важно для cd)
+        self.update_cwd_label()
 
         self.entry.delete(0, tk.END)
 
-    def run_startup_script(self):# Если указан startup_script, выполняем его построчно.
+    def run_startup_script(self): # Если указан startup_script, выполняем его построчно.
         sp = self.config.startup_script
         if not sp:
             return
@@ -370,8 +402,8 @@ class VFSApp:
                 self.writeln(f"--- Script stopped due to error on line: {line} ---")
                 return
 
-            if tokens and tokens[0] == "cd":
-                 self.update_cwd_label() # Обновляем метку CWD после cd в скрипте
+            # Обновляем метку CWD после cd в скрипте (важно для правильного отображения prompt'а)
+            self.update_cwd_label() 
 
             if tokens and tokens[0] == "exit":
                 self.writeln("--- Script requested exit ---")
@@ -379,14 +411,14 @@ class VFSApp:
 
         self.writeln(f"--- Startup script {sp} finished successfully ---")
 
-    def dump_config_on_start(self): #Отладочный вывод всех параметров при запуске эмулятора (conf-dump style).
+    def dump_config_on_start(self): # Отладочный вывод всех параметров при запуске эмулятора (conf-dump style).
         self.writeln("=== Emulator configuration (debug dump) ===")
         for k, v in self.config.items():
             self.writeln(f"{k} = {v}")
         self.writeln("==========================================")
         self.update_cwd_label()
 
-    def start(self, run_script_before_mainloop=True):
+    def start(self, run_script_before_mainloop: bool = True):
         self.dump_config_on_start()
         if run_script_before_mainloop:
             self.run_startup_script()
@@ -409,8 +441,8 @@ ls /
 """,
     # Скрипт для проверки обработки ошибок VFS
     "test_vfs_errors.vfs": """# Тестирование ошибок и выхода
-cd /nonexistent
-ls /config/settings.txt # Должна быть ошибка, но ls не поддерживает вывод файлов.
+cd /nonexistent # Должна быть ошибка, и скрипт должен остановиться тут
+ls /config/info.txt 
 unknown_cmd
 exit
 """,
@@ -443,7 +475,7 @@ VFS_CSVS = {
 }
 
 
-def create_sample_scripts(path="."):
+def create_sample_scripts(path: str = "."):
     created = []
     
     # 1. Создание CSV VFS файлов
@@ -475,7 +507,7 @@ def main():
         created = create_sample_scripts(".")
         print("Created sample scripts and VFS CSV files:")
         for c in created:
-            print("   ", c)
+            print("    ", c)
         print("\nRun emulator with --vfs-file <one_of_the_csvs> --startup-script <one_of_the_scripts> to test.")
         return
 
@@ -486,16 +518,17 @@ def main():
     if args.vfs_file:
         vfs, vfs_error = load_vfs_from_csv(args.vfs_file)
         if vfs_error:
-            # Выводим ошибку загрузки VFS в консоль и выходим
+            # ТЕСТ 3: Фатальная ошибка загрузки VFS
             print(f"FATAL VFS LOAD ERROR: {vfs_error}")
             sys.exit(1)
         config.vfs = vfs
         
-    # 3. Проверка, что VFS была загружена, если не загружена, то доступны только exit и conf-dump 
+    # 3. Проверка: если не было VFS-файла, но были другие аргументы (например, скрипт), запускаем.
     if not config.vfs and config.vfs_file:
-         print("FATAL VFS LOAD ERROR: VFS file specified but failed to load. Exiting.")
-         sys.exit(1)
-         
+          # Это не должно случиться, если обработка ошибки выше сработала, но как защита:
+          print("FATAL VFS LOAD ERROR: VFS file specified but failed to load. Exiting.")
+          sys.exit(1)
+          
     # 4. Создаём и запускаем GUI-приложение
     app = VFSApp(config)
     app.start(run_script_before_mainloop=True)
