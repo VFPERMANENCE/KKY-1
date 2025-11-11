@@ -32,7 +32,7 @@ def validate_version(value):
         raise argparse.ArgumentTypeError("Версия пакета не может быть пустой.")
     # простейшая валидация вроде X.Y.Z
     import re
-    if not re.match(r"^\d+(\.\d+){0,2}$", value): #регулярка - ^начало строки, \d+ одна или больше цифр,(\.\d+)точка + одна или больше цифр,{0,2}может поторяться с 0 до 2х раз,$-конец строки
+    if not re.match(r"^\d+(\.\d+){0,2}([_-]\w+)*$", value): #регулярка - ^начало строки, \d+ одна или больше цифр,(\.\d+)точка + одна или больше цифр,{0,2}может поторяться с 0 до 2х раз,([_-]\w+)*для суффиксов версий,$-конец строки
         raise argparse.ArgumentTypeError("Версия должна быть в формате X.Y или X.Y.Z (например, 1.0.3).")
     return value
 
@@ -53,7 +53,7 @@ def get_apk_path(repo_url, package, version, mode, dest_dir="downloads"):
     Path(dest_dir).mkdir(exist_ok=True)
 
     if mode == "remote":
-        apk_url = urljoin(repo_url + "/", apk_name)
+        apk_url = urljoin(repo_url, apk_name) #######!!!
         apk_path = Path(dest_dir) / apk_name
         print(f"Скачивание {apk_url} ...")
         try:
@@ -72,17 +72,25 @@ def get_apk_path(repo_url, package, version, mode, dest_dir="downloads"):
     return apk_path
 
 def extract_control_file(apk_path):
-    """Извлекает метаданные пакета (control, +PKGINFO или .PKGINFO) из .apk."""
-    print(f" Извлечение метаданных из {apk_path}...")
+    """Извлекает данные пакета (control, +PKGINFO или .PKGINFO) из .apk."""
     with tarfile.open(apk_path, "r:gz") as tar:
         members = tar.getmembers()
         print("Содержимое архива:")
         for m in members:
             print(" -", m.name)
 
+         # Ищем .PKGINFO (основной файл метаданных в Alpine)
+        for member in members:
+            if member.name == ".PKGINFO":
+                print("Найден .PKGINFO файл")
+                f = tar.extractfile(member)
+                content = f.read().decode("utf-8", errors="ignore")
+                return content
+            
         # Ищем control.tar.gz или control.tar
         for member in members:
             if member.name.endswith(("control.tar.gz", "control.tar")):
+                print(f"Найден архив control: {member.name}")
                 control_tar = tar.extractfile(member)
                 if control_tar is None:
                     continue
@@ -90,32 +98,62 @@ def extract_control_file(apk_path):
                 import io
                 with tarfile.open(fileobj=io.BytesIO(control_tar.read())) as control_inner:
                     for sub in control_inner.getmembers():
-                        if sub.name in ("control", "+PKGINFO", ".PKGINFO"):
+                        if sub.name == "control":
                             f = control_inner.extractfile(sub)
                             content = f.read().decode("utf-8", errors="ignore")
+                            print("Извлечен control файл")
                             return content
-
-        # Иногда файлы control лежат без архива
-        for member in members:
-            if member.name in ("control", "+PKGINFO", ".PKGINFO"):
-                f = tar.extractfile(member)
-                content = f.read().decode("utf-8", errors="ignore")
-                return content
 
     raise RuntimeError("Файл control или +PKGINFO/.PKGINFO не найден в архиве.")
 
 def parse_dependencies(control_text):
     """Находит и возвращает список зависимостей из control или похожего по смыслу файла."""
     """Возвращает список зависимостей из строки depends = ... в .PKGINFO/.control."""
-    deps = []
+    dependencies = []
+    
+    print("\nАнализ данных пакета...")
+    print("Содержимое .PKGINFO:")
+    print("-" * 10)
+    print(control_text)
+    print("-" * 10)
+    
     for line in control_text.splitlines():
         line = line.strip()
-        if line.startswith("depends"):
-            parts = line.split("=", 1)
-            if len(parts) == 2:
-                # разделяем по запятым, убираем пробелы
-                deps = [d.strip() for d in parts[1].split(",") if d.strip()]
-    return deps
+        
+        # Зависимости в Alpine .PKGINFO
+        if line.startswith("depend = "):
+            dep = line.split("=", 1)[1].strip()
+            if dep and dep not in dependencies:
+                dependencies.append(dep)
+                print(f"Найдена зависимость: {dep}")
+    
+    return dependencies
+def display_dependencies(package, version, dependencies, ascii_mode=False, filter_str=None):
+    """Отображает зависимости в указанном формате"""
+    
+    # ФИЛЬТР 
+    if filter_str:
+        original_count = len(dependencies)
+        dependencies = [dep for dep in dependencies if filter_str.lower() in dep.lower()]
+        print(f"\nПрименен фильтр '{filter_str}': показано {len(dependencies)} из {original_count} зависимостей")
+    
+    if not dependencies:
+        print(f"\nЗависимости не найдены (возможно, пакет не имеет зависимостей или фильтр не нашёл совпадений).")
+        return
+    
+    print(f"\nПрямые зависимости пакета {package}-{version}:")
+    print(f"Всего найдено: {len(dependencies)}")
+    
+    if ascii_mode:
+        print("┌─ Зависимости")
+        for i, dep in enumerate(dependencies):
+            if i == len(dependencies) - 1:
+                print(f"└── {dep}")
+            else:
+                print(f"├── {dep}")
+    else:
+        for i, dep in enumerate(dependencies, 1):
+            print(f"  {i:2d}. {dep}")
 
 
 def main():
@@ -130,7 +168,7 @@ def main():
     parser.add_argument("--mode", required=True, type=validate_mode,
                         help="Режим работы с тестовым репозиторием (local или remote).")
     parser.add_argument("--version", required=True, help="Версия анализируемого пакета.")
-    parser.add_argument("--output", required=True, help="Имя выходного файла для графа (например, graph.png).")
+    parser.add_argument("--output", required=False, help="Имя выходного файла для графа (например, graph.png).")
     parser.add_argument("--ascii", action="store_true", help="Режим вывода зависимостей в ASCII-дереве.")
     parser.add_argument("--filter", help="Подстрока для фильтрации пакетов.")
     
@@ -144,7 +182,7 @@ def main():
         print(f"\n Анализ пакета: {args.package_name} ({args.version})")
         print(f"Репозиторий/путь: {args.repo_url}")
         print(f"Режим работы: {args.mode}")
-        print("Получение данных...\n")
+        
         # 1. Скачать пакет
         apk_path = get_apk_path(args.repo_url, args.package_name, args.version, args.mode)
 
@@ -155,20 +193,8 @@ def main():
         deps = parse_dependencies(control_data)
 
         # 4. Вывести результат
-        if deps:
-            print("Прямые зависимости:")
-            if args.ascii:
-                for i, dep in enumerate(deps):
-                    if i == len(deps) - 1:  # последний элемент
-                        print(f"└── {dep}")
-                    else:
-                        print(f"├── {dep}")
-            else:
-                for dep in deps:
-                    print(f"  - {dep}")
-        else:
-            print("Зависимости не найдены (возможно, пакет не имеет зависимостей или фильтр не нашёл совпадений).")
-    
+        display_dependencies(args.package_name, args.version, deps, 
+                           args.ascii, args.filter)
     except Exception as e:
         print(f" Ошибка: {e}", file=sys.stderr)
         sys.exit(1)
@@ -176,11 +202,14 @@ def main():
 if __name__ == "__main__":
     main()
 
-#https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/busybox-1.37.0-r13.apk
-#python second.py --package-name busybox --repo-url https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/ --mode remote --version 1.37.0-r13 --output graph.png
-#python second.py --package-name apk-tools --repo-url https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/ --mode remote --version 2.14.4-r0 --output graph.png
+# #  Без фильтра (все зависимости)
+# python second.py --package-name busybox --repo-url https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/ --mode remote --version 1.37.0-r13
 
-#python second.py --package-name apk-tools-dev --repo-url https://dl-cdn.alpinelinux.org/v3.21/main/x86_64/apk-tools-dev-2.14.6-r3.apk --mode remote --version 2.14.6-r3 --output graph.png
-#python second.py --package-name apk-tools --repo-url https://gitlab.alpinelinux.org/alpine/apk-tools  --mode remote --version 1.37.0-r13 --output graph.png
+# #  С фильтром "so" (только библиотеки)
+# python second.py --package-name busybox --repo-url https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/ --mode remote --version 1.37.0-r13 --filter so
 
+# # С фильтром "lib" 
+# python second.py --package-name busybox --repo-url https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/ --mode remote --version 1.37.0-r13 --filter lib
 
+# # С ASCII-выводом и фильтром
+# python second.py --package-name busybox --repo-url https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/ --mode remote --version 1.37.0-r13 --ascii --filter so
