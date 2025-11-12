@@ -13,9 +13,7 @@ def validate_url_or_path(value):
     if parsed.scheme in ("http", "https"):
         return value
     p = Path(value)
-    if not p.exists():
-        raise argparse.ArgumentTypeError(f"'{value}' не является корректным URL или путём к файлу.")
-    return str(p.resolve())
+    return str(p.absolute()) #Проверка будет в TestRepository
 
 def validate_mode(value):
     allowed = ["local", "remote", "test"]

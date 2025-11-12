@@ -21,7 +21,7 @@ class TestRepository:
                 if not line or line.startswith('#'):
                     continue
                 
-                # Формат: PACKAGE: DEP1, DEP2, DEP3
+                # Формат: ПАКЕТ: зависимость1, зависимость2,...
                 if ':' not in line:
                     print(f"Предупреждение: некорректная строка {line_num}: {line}")
                     continue

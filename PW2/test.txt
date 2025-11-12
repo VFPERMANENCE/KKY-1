@@ -1,0 +1,8 @@
+A: B, C
+B: C, D, E
+C: A, F  # Цикл A->B->C->A
+D: F, G
+E: H
+F: 
+G: D     # Цикл D->G->D
+H: E     # Цикл E->H->E

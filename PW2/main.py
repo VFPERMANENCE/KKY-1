@@ -38,9 +38,6 @@ def main():
     args = parser.parse_args()
     
     try:
-        print("=" * 60)
-        print(" АНАЛИЗ ГРАФА ЗАВИСИМОСТЕЙ")
-        print("=" * 60)
         print(f"Пакет: {args.package_name}")
         print(f"Источник: {args.repo_url}")
         print(f"Режим: {args.mode}")
@@ -52,6 +49,11 @@ def main():
             print(f"Максимальная глубина: {args.max_depth}")
         print("=" * 60)
         
+        #доп проверка
+        if args.mode == "test":
+            test_path = Path(args.repo_url)
+            if not test_path.exists():
+                raise FileNotFoundError(f"Файл тестового репозитория не найден: {test_path}")
        
         graph = DependencyGraph()
         
@@ -109,10 +111,10 @@ if __name__ == "__main__":
     main()
     
 # # Режим тестирования с файлом репозитория
-#   python main.py --package-name A --repo-url test_repo.txt --mode test
+#   python main.py --package-name A --repo-url test1.txt --mode test
   
 #   # Реальный APK-пакет
 #   python main.py --package-name busybox --repo-url https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/ --mode remote --version 1.37.0-r13
   
 #   # С исключением пакетов
-#   python main.py --package-name A --repo-url test_repo.txt --mode test --exclude C    
+#   python main.py --package-name A --repo-url test.txt --mode test --exclude C    
